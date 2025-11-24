@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DVR Casero Mejorado</title>
+  <style>
+    * { box-sizing: border-box; font-family: Arial, sans-serif; }
+    body { margin: 0; background: #111; color: #eee; }
+
+    .layout {
+      display: flex;
+      height: 100vh;
+    }
+
+    .sidebar {
+      width: 260px;
+      background: #1a1a1a;
+      padding: 20px;
+      overflow-y: auto;
+      border-right: 2px solid #333;
+    }
+    .sidebar h2 { margin-top: 0; }
+    .sidebar button,
+    .sidebar input {
+      width: 100%;
+      margin-bottom: 10px;
+      padding: 10px;
+      background: #222;
+      color: white;
+      border: 1px solid #444;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .sidebar button:hover { background: #333; }
+
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 20px;
+    }
+    h1 { margin-top: 10px; }
+
+    video {
+      width: 90%;
+      max-width: 1000px;
+      background: black;
+      border: 2px solid #444;
+      border-radius: 10px;
+    }
+
+    #timer {
+      margin-top: 10px;
+      font-size: 2rem;
+      background: #222;
+      padding: 10px 20px;
+      border-radius: 8px;
+    }
+
+    #list li {
+      padding: 6px;
+      margin-bottom: 4px;
+      background: #222;
+      border-radius: 5px;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+
+<div class="layout">
+
+  <aside class="sidebar">
+      <h2>Panel</h2>
+
+      <button id="btnCam">📷 Cámara</button>
+      <button id="btnScreen">🖥 Pantalla</button>
+      <button id="btnStop" disabled>⛔ Detener</button>
+
+      <hr>
+
+      <label>Intervalo (seg):
+        <input id="interval" type="number" min="5" value="60">
+      </label>
+      <button id="btnInterval">⏳ Intervalos</button>
+
+      <button id="btnHide">🙈 Modo oculto</button>
+
+      <hr>
+
+      <h3>Historial</h3>
+      <ul id="list"></ul>
+  </aside>
+
+  <main class="main">
+      <h1>DVR Casero</h1>
+      <video id="preview" autoplay muted playsinline></video>
+      <div id="timer">00:00</div>
+  </main>
+
+</div>
+
+<script>
+  const btnCam = document.getElementById('btnCam');
+  const btnScreen = document.getElementById('btnScreen');
+  const btnStop = document.getElementById('btnStop');
+  const preview = document.getElementById('preview');
+  const timer = document.getElementById('timer');
+  const list = document.getElementById('list');
+
+  let stream = null;
+  let recorder = null;
+  let chunks = [];
+  let timerInt = null;
+  let seconds = 0;
+
+  function updateTimer() {
+    seconds++;
+    let m = String(Math.floor(seconds / 60)).padStart(2, '0');
+    let s = String(seconds % 60).padStart(2, '0');
+    timer.textContent = `${m}:${s}`;
+  }
+
+  async function startCapture(type) {
+    try {
+      if (type === 'cam') {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      } else {
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      }
+
+      preview.srcObject = stream;
+
+      recorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp8' });
+
+      recorder.ondataavailable = e => chunks.push(e.data);
+
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'video/webm' });
+        chunks = [];
+
+        const url = URL.createObjectURL(blob);
+        const li = document.createElement('li');
+        li.textContent = `Video ${new Date().toLocaleTimeString()}`;
+        li.onclick = () => window.open(url);
+        list.appendChild(li);
+      };
+
+      recorder.start();
+      btnStop.disabled = false;
+      btnCam.disabled = true;
+      btnScreen.disabled = true;
+
+      seconds = 0;
+      timer.textContent = '00:00';
+      timerInt = setInterval(updateTimer, 1000);
+
+    } catch (err) {
+      alert('Error: ' + err);
+    }
+  }
+
+  btnCam.onclick = () => startCapture('cam');
+  btnScreen.onclick = () => startCapture('screen');
+
+  btnStop.onclick = () => {
+    recorder.stop();
+    stream.getTracks().forEach(t => t.stop());
+
+    clearInterval(timerInt);
+
+    btnStop.disabled = true;
+    btnCam.disabled = false;
+    btnScreen.disabled = false;
+  };
+
+  document.getElementById('btnHide').onclick = () => {
+    document.body.style.opacity = '0';
+    setTimeout(() => document.body.style.display = 'none', 500);
+  };
+// --- FIX PREVIEW WEBCAM + AUDIO + BAR VU ---
+// Reemplaza completamente la función startCapture
+async function startCapture(type) {
+  try {
+    if (type === 'cam') {
+      stream = await navigator.mediaDevices.getUserMedia({ 
+        video: true, 
+        audio: { echoCancellation: true }
+      });
+    } else {
+      stream = await navigator.mediaDevices.getDisplayMedia({ 
+        video: true, 
+        audio: true 
+      });
+    }
+
+    // Vista previa funciona aquí
+    preview.srcObject = stream;
+
+    // ---- Barra VU AUDIO ----
+    const audioCtx = new AudioContext();
+    const analyser = audioCtx.createAnalyser();
+    const micSource = audioCtx.createMediaStreamSource(stream);
+    micSource.connect(analyser);
+    analyser.fftSize = 256;
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    // Crear barrita si no existe
+    let vu = document.getElementById('vu');
+    if (!vu) {
+      vu = document.createElement('div');
+      vu.id = 'vu';
+      vu.style.width = '200px';
+      vu.style.height = '10px';
+      vu.style.background = '#333';
+      vu.style.marginTop = '10px';
+      vu.style.borderRadius = '5px';
+      vu.innerHTML = '<div id="vuFill" style="height:100%;width:0;background:#3fa93f;border-radius:5px;"></div>';
+      document.querySelector('.main').appendChild(vu);
+    }
+    const vuFill = document.getElementById('vuFill');
+
+    function updateVU() {
+      analyser.getByteFrequencyData(dataArray);
+      let vol = dataArray.reduce((a,b)=>a+b) / dataArray.length;
+      vuFill.style.width = Math.min(vol,100) + '%';
+      requestAnimationFrame(updateVU);
+    }
+    updateVU();
+
+    // ---- Grabador ----
+    recorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp8' });
+
+    recorder.ondataavailable = e => chunks.push(e.data);
+
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: 'video/webm' });
+      chunks = [];
+
+      // descarga automática
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'grabacion_' + Date.now() + '.webm';
+      a.click();
+
+      // historial
+      const li = document.createElement('li');
+      li.textContent = `Video ${new Date().toLocaleTimeString()}`;
+      list.appendChild(li);
+    };
+
+    recorder.start();
+    btnStop.disabled = false;
+    btnCam.disabled = true;
+    btnScreen.disabled = true;
+
+    seconds = 0;
+    timer.textContent = '00:00';
+    timerInt = setInterval(updateTimer, 1000);
+
+    // SPA HASH
+    location.hash = type === 'cam' ? '#camara' : '#pantalla';
+
+  } catch (err) {
+    alert('Error: ' + err);
+  }
+}
+
+</script>
+
+</body>
+</html>
